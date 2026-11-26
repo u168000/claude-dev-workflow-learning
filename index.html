@@ -114,7 +114,7 @@ th{color:var(--mute);font-weight:400}
   <details style="margin-top:10px;font-size:13px">
     <summary style="cursor:pointer;min-height:32px">連線設定與診斷</summary>
     <label class="f" style="margin-top:6px">自訂 Proxy（優先使用；{url} 代表目標網址，省略時直接接在後面）</label>
-    <div class="top"><input id="proxy" placeholder="https://你的worker.workers.dev/?url={url}"><button id="btnProxy">儲存並測試</button></div>
+    <div class="top"><input id="proxy" placeholder="留空＝使用內建 tw-quote.apex-wu.workers.dev"><button id="btnProxy">儲存並測試</button></div>
     <div id="diag" class="mute" style="margin-top:6px;white-space:pre-wrap;font-size:12px">尚未連線</div>
     <p class="mute" style="margin:8px 0 4px">公開 Proxy 常限流。最穩的做法是部署自己的 Cloudflare Worker（免費），把下面程式碼貼上後，將網址填入上方欄位：</p>
     <pre id="worker" style="background:var(--bg);padding:8px;border-radius:8px;font-size:11px;overflow-x:auto;margin:0">export default {
@@ -434,7 +434,8 @@ async function tryOne(px,url){const ac=new AbortController();const to=setTimeout
   if(!r.ok)throw new Error(`HTTP ${r.status}`);const j=JSON.parse(await r.text());return{j,via:px.n}}
  catch(e){throw new Error(`${px.n}:${e.name==='AbortError'?'逾時':e.name==='SyntaxError'?'非JSON':e.message.startsWith('HTTP')?e.message:'連線被擋'}`)}
  finally{clearTimeout(to)}}
-async function getJSON(url,label){const errs=[];const c=(S.proxy||'').trim();
+const MY_PROXY='https://tw-quote.apex-wu.workers.dev/?url={url}';
+async function getJSON(url,label){const errs=[];const c=((S.proxy||'').trim()||MY_PROXY);
  if(c){try{const r=await tryOne({n:'自訂',f:u=>c.includes('{url}')?c.replace('{url}',encodeURIComponent(u)):c+encodeURIComponent(u)},url);blockedAll=0;return r}
   catch(e){errs.push(e.message)}}
  try{const r=await Promise.any(PUB.map(px=>tryOne(px,url)));blockedAll=0;return r}

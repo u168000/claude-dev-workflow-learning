@@ -114,7 +114,7 @@ th{color:var(--mute);font-weight:400}
   <details style="margin-top:10px;font-size:13px">
     <summary style="cursor:pointer;min-height:32px">連線設定與診斷</summary>
     <label class="f" style="margin-top:6px">自訂 Proxy（優先使用；{url} 代表目標網址，省略時直接接在後面）</label>
-    <div class="top"><input id="proxy" placeholder="https://你的worker.workers.dev/?url={url}"><button id="btnProxy">儲存</button></div>
+    <div class="top"><input id="proxy" placeholder="https://你的worker.workers.dev/?url={url}"><button id="btnProxy">儲存並測試</button></div>
     <div id="diag" class="mute" style="margin-top:6px;white-space:pre-wrap;font-size:12px">尚未連線</div>
     <p class="mute" style="margin:8px 0 4px">公開 Proxy 常限流。最穩的做法是部署自己的 Cloudflare Worker（免費），把下面程式碼貼上後，將網址填入上方欄位：</p>
     <pre id="worker" style="background:var(--bg);padding:8px;border-radius:8px;font-size:11px;overflow-x:auto;margin:0">export default {
@@ -354,7 +354,8 @@ function refresh(){save();
   ['融資追價警示',T.gapMargin?'<span class="up">● 紅燈：大漲＋融資大增</span>':'<span class="mute">正常</span>']
  ].map(([a,b])=>`<div class="chk"><span>${a}</span>${b}</div>`).join('');
  // 訊號
- const [lvl,txt,why]=signal(L,T,lv);const bn=$('banner');bn.className='b-'+lvl;bn.innerHTML=`${txt}<small>${esc(why)}</small>`;
+ let [lvl,txt,why]=signal(L,T,lv);if(Q.mode!=='real'){txt='【模擬價】'+txt;why+='（非真實報價，僅供測試）'}
+ const bn=$('banner');bn.className='b-'+lvl;bn.innerHTML=`${txt}<small>${esc(why)}</small>`;
  if(lastLevel&&lastLevel!==txt){addLog(lvl,txt,p);bn.classList.add('flash');setTimeout(()=>bn.classList.remove('flash'),3200)}
  if(!lastLevel&&!S.logs.length)addLog(lvl,txt,p);lastLevel=txt;
  const col={green:'var(--dn)',yellow:'var(--amb)',red:'var(--up)',gray:'#475569'};
@@ -422,20 +423,22 @@ const PUB=[{n:'allorigins',f:u=>'https://api.allorigins.win/raw?url='+encodeURIC
  {n:'corsproxy.io',f:u=>'https://corsproxy.io/?url='+encodeURIComponent(u)},
  {n:'codetabs',f:u=>'https://api.codetabs.com/v1/proxy?quest='+encodeURIComponent(u)},
  {n:'cors.lol',f:u=>'https://api.cors.lol/?url='+encodeURIComponent(u)}];
-let prefer=0;const diagLines=[];
+const diagLines=[];
 const diag=t=>{diagLines.unshift(`${tpeNow().str} ${t}`);diagLines.length=Math.min(diagLines.length,8);$('diag').textContent=diagLines.join('\n')};
 function proxies(){const L=[];const c=(S.proxy||'').trim();
  if(c)L.push({n:'自訂',f:u=>c.includes('{url}')?c.replace('{url}',encodeURIComponent(u)):c+encodeURIComponent(u)});
  const P=PUB.slice(prefer).concat(PUB.slice(0,prefer));return L.concat(P)}
-let blockedAll=0;
-async function getJSON(url,label){const errs=[];
- for(const px of proxies()){try{const ac=new AbortController();const to=setTimeout(()=>ac.abort(),7000);
-   const r=await fetch(px.f(url),{signal:ac.signal,cache:'no-store'});clearTimeout(to);
-   if(!r.ok){errs.push(`${px.n}:HTTP ${r.status}`);continue}
-   const t=await r.text();const j=JSON.parse(t);
-   if(px.n!=='自訂'){const i=PUB.findIndex(x=>x.n===px.n);if(i>=0)prefer=i}
-   blockedAll=0;return{j,via:px.n}}
-  catch(e){errs.push(`${px.n}:${e.name==='AbortError'?'逾時':e.name==='SyntaxError'?'非JSON':'連線被擋'}`)}}
+let blockedAll=0,failStreak=0,nextTry=0;
+async function tryOne(px,url){const ac=new AbortController();const to=setTimeout(()=>ac.abort(),6000);
+ try{const r=await fetch(px.f(url),{signal:ac.signal,cache:'no-store'});
+  if(!r.ok)throw new Error(`HTTP ${r.status}`);const j=JSON.parse(await r.text());return{j,via:px.n}}
+ catch(e){throw new Error(`${px.n}:${e.name==='AbortError'?'逾時':e.name==='SyntaxError'?'非JSON':e.message.startsWith('HTTP')?e.message:'連線被擋'}`)}
+ finally{clearTimeout(to)}}
+async function getJSON(url,label){const errs=[];const c=(S.proxy||'').trim();
+ if(c){try{const r=await tryOne({n:'自訂',f:u=>c.includes('{url}')?c.replace('{url}',encodeURIComponent(u)):c+encodeURIComponent(u)},url);blockedAll=0;return r}
+  catch(e){errs.push(e.message)}}
+ try{const r=await Promise.any(PUB.map(px=>tryOne(px,url)));blockedAll=0;return r}
+ catch(ag){(ag.errors||[]).forEach(e=>errs.push(e.message))}
  diag(`${label} 失敗 → ${errs.join('、')}`);
  if(errs.every(x=>x.includes('連線被擋')))blockedAll++;return null}
 const num=s=>{const x=parseFloat(s);return Number.isFinite(x)?x:NaN};
@@ -463,6 +466,7 @@ async function load(user){if(busy)return;const code=($('code').value||'').trim()
  if(!/^[0-9A-Z]{4,7}$/.test(code))return say('代號格式不正確');
  const changed=code!==Q.code;S.code=code;Q.code=code;
  if(S.forceSim){if(changed||Q.mode==='real')startSim(Q.y>0&&!changed?Q.price:(S.cost>0?S.cost:100),'（模擬測試）');refresh();return}
+ if(!user&&Date.now()<nextTry)return;
  busy=true;if(user)$('btnFetch').textContent='抓取中…';
  let d=await fetchMis(code);if(!d)d=await fetchYahoo(code);
  $('btnFetch').textContent='抓取即時報價';busy=false;
@@ -475,12 +479,13 @@ async function load(user){if(busy)return;const code=($('code').value||'').trim()
    const last=series[series.length-1];const v=Q.vol+volOff;
    if(!last||last.p!==Q.price||Math.abs(last.v-v)>0.5)series.push({t:tpeNow().str,p:Q.price,v});if(series.length>400)series.shift()}
   if(first&&seeded!==code)seedBars(code);
-  $('hint').textContent='';diag(`成功：${d.src} ${fmt(d.price)}`);
+  failStreak=0;nextTry=0;$('hint').textContent='';diag(`成功：${d.src} ${fmt(d.price)}`);
   if(first&&Q.live&&!polling)$('btnPoll').click();
   refresh()}
  else{
+  failStreak++;if(failStreak>=2){nextTry=Date.now()+Math.min(60000,15000*failStreak);diag(`連續失敗 ${failStreak} 次，${Math.round((nextTry-Date.now())/1000)} 秒後再試`)}
   const framed=(()=>{try{return window.top!==window.self}catch(e){return true}})();
-  $('hint').textContent=blockedAll&&framed?'目前在 Claude 內嵌頁面開啟，瀏覽器安全規則禁止連外抓價。請改用獨立網址（如 GitHub Pages）開啟本頁。':'抓價失敗：可展開「連線設定與診斷」查看原因，或填入自訂 Proxy。';
+  $('hint').textContent=blockedAll&&framed?'目前在 Claude 內嵌頁面開啟，瀏覽器安全規則禁止連外抓價。請改用獨立網址（如 GitHub Pages）開啟本頁。':'抓價失敗：公開 Proxy 目前全部不通，請在「連線設定與診斷」填入你自己的 Cloudflare Worker 網址。';
   if(Q.mode==='real'&&!changed){say('本次抓價失敗，沿用上一筆報價');return}
   if(changed||!series.length||Q.mode==='real')startSim(S.cost>0?S.cost:100,'（模擬）');
   if(user)say('無法取得真實報價，暫以模擬模式顯示');refresh()}}
